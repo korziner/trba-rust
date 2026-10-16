@@ -1,0 +1,40 @@
+[package]
+name = "trba-rust"
+version = "0.2.0"
+edition = "2021"
+description = "TRBA OCR trainer ported to Rust with INT8 tensor-core CUDA kernels"
+license = "MIT"
+
+[[bin]]
+name = "trba-rust"
+path = "src/main.rs"
+
+
+[dependencies]
+image = { version = "0.24", default-features = false, features = ["png", "jpeg"] }
+rand = "0.8"
+anyhow = "1.0"
+indicatif = "0.17"
+rayon = "1.8"
+
+# The native backend is compiled and linked by build.rs:
+#   * cuda/kernels.cu       through nvcc   (when a CUDA toolkit is present)
+#   * cuda/cpu_backend.cpp  through g++    (otherwise, or TRBA_FORCE_CPU=1)
+# Everything is linked statically, so no LD_LIBRARY_PATH is needed at run time.
+
+[profile.release]
+opt-level = 3
+debug = 1            # line numbers in backtraces / cuda-gdb
+panic = "unwind"
+incremental = true
+# LTO off on purpose: it roughly triples peak rustc memory and link time for
+# no measurable gain here (the hot loops are in the native backend).
+lto = false
+
+[profile.release-lto]
+inherits = "release"
+lto = true
+incremental = false
+
+[profile.dev]
+opt-level = 1
