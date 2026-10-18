@@ -1,5 +1,144 @@
 # trba-rust
-TRBA OCR port to Rust and CUDA
+TRBA OCR port to Rust and CUDA + MoPE arch
+
+```
+OMP_NUM_THREADS=4 bash scripts/mope_menu.sh
+
+── Что делаем?
+   1) импорт датасета YeniseiGovReports-HWR в формат trba-rust (секунды)
+   2) замер скорости на 500 строках (~1 мин, чтобы не запускать вслепую)
+   3) обучить эксперта / продолжить обучение
+   4) связать двух экспертов в MoPE и прогнать инференс
+   5) корзины по длине: много экспертов (длины 4…40) и один франкен
+   выбор [1-5, Enter = 1]: 5
+
+▶ геометрия: --img-h 32 --img-w 160 --max-len 20 --hidden 64 --feat-dim 128
+
+── Схема корзин?
+   1) auto — смежные диапазоны, в каждом не меньше MIN_ROWS строк: корзин меньше, каждая плотная, паддинг минимален (рекомендуется)
+   2) exact — ровно по одной длине 4,5,6,…,40: до 37 экспертов, длинные корзины жидкие или пустые
+   3) cum — накопительно: корзина L видит все строки длиной ≤ L, последняя обучается дольше всех
+   4) только план (ничего не обучать): показать корзины и их размеры
+   выбор [1-4, Enter = 1]: 
+
+── Минимум строк в корзине?
+   1) 300 — корзин больше, эксперты слабее
+   2) 1000 — равновесие
+   3) 3000 — корзин меньше, эксперты сильнее
+   4) 5000
+   выбор [1-4, Enter = 1]: 4
+
+── Эпох на корзину? (каждая корзина мала, поэтому эпох нужно больше, чем на полном датасете)
+   1) 3 — быстро прикинуть
+   2) 6
+   3) 10 — рабочее качество
+   4) 33 — максимум
+   выбор [1-4, Enter = 1]: 4
+   train: 124768 строк → 109570 годных
+   val: 22401 строк → 20586 годных
+🔤 charset YeniseiGovReports-HWR/charset_trba.txt: 130 токенов (3 служебных + 127 символов по train)
+💾 YeniseiGovReports-HWR/train/trba_train.csv: 109570 строк
+💾 YeniseiGovReports-HWR/val/trba_val.csv: 20568 строк
+📏 длина текста: p50 5 · p90 11 · p99 15 · max 32
+🖼  картинки (200 шт): ширина min 12 / p50 61 / max 198, высота min 8 / p50 19 / max 37
+   препроцессинг trba-rust: RGB → resize с сохранением пропорций → белый холст, поэтому кадр 32×160 подходит и словам 30×22, и 140×29
+🧹 отброшено: короче 2 17011, нет картинки 2, символ вне словаря 18
+📄 YeniseiGovReports-HWR/trba_import_report.txt
+🔤 словарь собран: 130138 строк из YeniseiGovReports-HWR/train/full_train.csv,YeniseiGovReports-HWR/val/full_val.csv, 127 символов + 3 служебных → YeniseiGovReports-HWR/charset_full.txt (пропущено заголовков 0, битых строк 0)
+корпус: 109570 строк | длина min 2 · p50 5 · p90 11 · p99 15 · max 32
+гистограмма длин: 2:18864 3:12693 4:13111 5:11258 6:10261 7:9699 8:8537 9:7948 10:5849 11:4287 12:2687 13:1694 14:994 15:753 16:391 17:207 18:144 19:78 20:32 21:34 22:14 23:18 24:6 25:6 26:3 32:2
+⚠️  --hi 40 больше максимальной длины 32: корзины длиннее 32 будут пустыми и пропущены
+корзина         длины   строк контроль  img_w  max_len
+bucket_04_04        4…4   13111     2561     64        4
+bucket_05_05        5…5   11258     2070     96        5
+bucket_06_06        6…6   10261     1985     96        6
+bucket_07_07        7…7    9699     1839    128        7
+bucket_08_08        8…8    8537     1512    128        8
+bucket_09_09        9…9    7948     1517    160        9
+bucket_10_10      10…10    5849     1177    160       10
+bucket_11_12      11…12    6974     1354    192       12
+bucket_13_40      13…40    4376      832    256       40
+
+▶ корзин: 9 | план: /home/korziner/Downloads/7c99..ZIP/trba-rust/YeniseiGovReports-HWR/train/buckets_plan.tsv
+  у каждой корзины свой --max-len (= hi) и свой --img-w: паддинг не
+  считается впустую, а CER каждой корзины измеряется на строках её длины.
+
+▶ корзин 9 | потолок прогона max_len=40 | fd=128 эпох 88 batch 48
+
+════ корзина bucket_04_04: длины 4…4, строк 13111, img 32×64, max_len 4 ════
+total 34M
+12M Oct 18 02:25 checkpoint_epoch024_loss2.0275.bin
+12M Oct 18 05:53 checkpoint_epoch033_loss2.0205.bin
+12M Oct 18 05:53 checkpoint_last.bin
+🚀 TRBA (Rust + INT8 QAT) | бэкенд: cuda | NVIDIA CMP 50HX
+📖 charset: 130 токенов | img 32x64 | max_len 4 | hidden 64 | слоёв BiLSTM 2
+📄 train: 13111 (пропущено 0) | val: 2561 (пропущено 0)
+⚙️  оптимизатор: Muon (momentum-free) для матриц, lr·sqrt(max_dim) + Adam для векторов, cap 10 | глобальный clip: первые 500 шаг(ов)
+🧠 веса свёрток (2.63M) с градиентами и Adam-состоянием живут на GPU: ~40 MB VRAM, зато ~0.6 MB трафика через PCIe на батч вместо ~362 MB
+   мало видеопамяти? TRBA_HOST_CONV_ADAM=1 вернёт оптимизатор на хост (+362 MB/батч по PCIe); TRBA_PCIE_COUNTER=1 печатает фактический трафик
+📂 resume: exp_len_04_04/checkpoint_last.bin
+   чекпоинт: 32×64 max_len 4 hidden 64 классов 130 rnn 2 feat 128
+   запуск    : 32×64 max_len 4 hidden 64 классов 130 rnn 2 feat 128
+   завершено эпох: 33 | продолжать с эпохи 34, батч 1 | шаг оптимизатора 22146 | Adam-моменты: восстановлены
+💾 rolling-чекпоинт exp_len_04_04/checkpoint_last.bin: каждые 500 батч(ей) и в конце каждой эпохи (продолжить — тот же запуск без --no-resume)
+[trba] int8 GEMM: WMMA m16n16k16 s8*s8->s32 (тензорные ядра, IMMA) | cc 7.5 | SM 56 | выбран автоматически
+Эпоха 34/88 | 61s | loss 2.0370 (attn 2.0114 ctc 2.8645, w_ctc 0.030) | lr 3.53e-4
+Эпоха 35/88 | 57s | loss 2.0287 (attn 2.0029 ctc 2.8627, w_ctc 0.030) | lr 3.45e-4
+...
+Эпоха 87/88 | 55s | loss 1.9238 (attn 1.8953 ctc 2.8440, w_ctc 0.030) | lr 6.51e-7
+Эпоха 88/88 | 55s | loss 1.9225 (attn 1.8940 ctc 2.8441, w_ctc 0.030) | lr 1.63e-7
+💾 exp_len_04_04/checkpoint_epoch088_loss1.9225.bin
+🚀 TRBA (Rust + INT8 QAT) | бэкенд: cuda | NVIDIA CMP 50HX
+📖 charset: 130 токенов | img 32x64 | max_len 4 | hidden 64 | слоёв BiLSTM 2
+📖 exp_len_04_04/checkpoint_last.bin: эпоха 88
+   exp_len_04_04 → перенесено 138 тензоров манифеста, пропущено 0
+💾 experts/yen_04_04.mope (int8 MOPEBI01): 2.96 МБ вместо 11.75 МБ fp32, 2938484 параметров, 194 тензоров
+   exp_len_04_04 [trba-rust-bin] img 32×64 max_len 4 hidden 64 feat 128 классов 130 rnn 2 (pad 0 sos 1 eos 2)
+
+════ корзина bucket_05_05: длины 5…5, строк 11258, img 32×96, max_len 5 ════
+total 46M
+12M Oct 17 22:11 checkpoint_epoch010_loss2.7509.bin
+12M Oct 18 02:35 checkpoint_epoch024_loss2.5829.bin
+12M Oct 18 06:02 checkpoint_epoch033_loss2.5600.bin
+12M Oct 18 06:02 checkpoint_last.bin
+🚀 TRBA (Rust + INT8 QAT) | бэкенд: cuda | NVIDIA CMP 50HX
+📖 charset: 130 токенов | img 32x96 | max_len 5 | hidden 64 | слоёв BiLSTM 2
+📄 train: 11258 (пропущено 0) | val: 2070 (пропущено 0)
+⚙️  оптимизатор: Muon (momentum-free) для матриц, lr·sqrt(max_dim) + Adam для векторов, cap 10 | глобальный clip: первые 500 шаг(ов)
+🧠 веса свёрток (2.63M) с градиентами и Adam-состоянием живут на GPU: ~40 MB VRAM, зато ~0.6 MB трафика через PCIe на батч вместо ~362 MB
+   мало видеопамяти? TRBA_HOST_CONV_ADAM=1 вернёт оптимизатор на хост (+362 MB/батч по PCIe); TRBA_PCIE_COUNTER=1 печатает фактический трафик
+📂 resume: exp_len_05_05/checkpoint_last.bin
+   чекпоинт: 32×96 max_len 5 hidden 64 классов 130 rnn 2 feat 128
+   запуск    : 32×96 max_len 5 hidden 64 классов 130 rnn 2 feat 128
+   завершено эпох: 33 | продолжать с эпохи 34, батч 1 | шаг оптимизатора 15573 | Adam-моменты: восстановлены
+💾 rolling-чекпоинт exp_len_05_05/checkpoint_last.bin: каждые 500 батч(ей) и в конце каждой эпохи (продолжить — тот же запуск без --no-resume)
+[trba] int8 GEMM: WMMA m16n16k16 s8*s8->s32 (тензорные ядра, IMMA) | cc 7.5 | SM 56 | выбран автоматически
+Эпоха 34/88 | 67s | loss 2.7363 (attn 2.7245 ctc 3.1150, w_ctc 0.030) | lr 3.53e-4
+Эпоха 35/88 | 83s | loss 2.6841 (attn 2.6705 ctc 3.1230, w_ctc 0.030) | lr 3.45e-4
+...
+════ корзина bucket_09_09: длины 9…9, строк 7948, img 32×160, max_len 9 ════
+total 34M
+12M Oct 18 00:05 checkpoint_epoch010_loss2.9355.bin
+12M Oct 18 03:44 checkpoint_epoch024_loss2.6911.bin
+12M Oct 18 03:44 checkpoint_last.bin
+🚀 TRBA (Rust + INT8 QAT) | бэкенд: cuda | NVIDIA CMP 50HX
+📖 charset: 130 токенов | img 32x160 | max_len 9 | hidden 64 | слоёв BiLSTM 2
+📄 train: 7948 (пропущено 0) | val: 1517 (пропущено 0)
+⚙️  оптимизатор: Muon (momentum-free) для матриц, lr·sqrt(max_dim) + Adam для векторов, cap 10 | глобальный clip: первые 500 шаг(ов)
+🧠 веса свёрток (2.63M) с градиентами и Adam-состоянием живут на GPU: ~40 MB VRAM, зато ~0.6 MB трафика через PCIe на батч вместо ~362 MB
+   мало видеопамяти? TRBA_HOST_CONV_ADAM=1 вернёт оптимизатор на хост (+362 MB/батч по PCIe); TRBA_PCIE_COUNTER=1 печатает фактический трафик
+📂 resume: exp_len_09_09/checkpoint_last.bin
+   чекпоинт: 32×160 max_len 9 hidden 64 классов 130 rnn 2 feat 128
+   запуск    : 32×160 max_len 9 hidden 64 классов 130 rnn 2 feat 128
+   завершено эпох: 24 | продолжать с эпохи 25, батч 1 | шаг оптимизатора 11928 | Adam-моменты: восстановлены
+💾 rolling-чекпоинт exp_len_09_09/checkpoint_last.bin: каждые 500 батч(ей) и в конце каждой эпохи (продолжить — тот же запуск без --no-resume)
+[trba] int8 GEMM: WMMA m16n16k16 s8*s8->s32 (тензорные ядра, IMMA) | cc 7.5 | SM 56 | выбран автоматически
+Эпоха 25/88 | 93s | loss 2.7539 (attn 2.7442 ctc 3.0677, w_ctc 0.030) | lr 4.23e-4
+Эпоха 26/88 | 91s | loss 2.7154 (attn 2.7046 ctc 3.0657, w_ctc 0.030) | lr 4.16e-4
+...
+Эпоха 68/88 | 94s | loss 2.4527 (attn 2.4340 ctc 3.0584, w_ctc 0.030) | lr 6.85e-5
+Эпоха 69/88 | 93s | loss 2.4520 (attn 2.4333 ctc 3.0564, w_ctc 0.030) | lr 6.24e-5
+```
 
 ## Backends
 
